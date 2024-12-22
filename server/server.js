@@ -8,6 +8,38 @@ const path = require('path');
 const app = express();
 const port = process.env.PORT || 5001;
 
+// MongoDB Connection with retry logic
+const connectDB = async () => {
+    try {
+        const options = {
+            useNewUrlParser: true,
+            useUnifiedTopology: true,
+            dbName: 'csvtojsonconverter' // Your database name
+        };
+
+        await mongoose.connect(process.env.MONGODB_URI, options);
+        console.log('MongoDB Connected Successfully!');
+
+        // Create a test collection
+        const testSchema = new mongoose.Schema({
+            name: String,
+            createdAt: { type: Date, default: Date.now }
+        });
+        
+        const Test = mongoose.models.Test || mongoose.model('Test', testSchema);
+        await Test.create({ name: 'connection-test' });
+        console.log('Database write test successful!');
+
+    } catch (error) {
+        console.error('MongoDB connection error:', error);
+        console.log('Retrying connection in 5 seconds...');
+        setTimeout(connectDB, 5000);
+    }
+};
+
+// Connect to MongoDB
+connectDB();
+
 // CORS configuration
 const corsOptions = {
     origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : '*',
@@ -19,6 +51,23 @@ const corsOptions = {
 // Middleware
 app.use(cors(corsOptions));
 app.use(bodyParser.json());
+
+// Test MongoDB connection route
+app.get('/api/db-test', async (req, res) => {
+    try {
+        const Test = mongoose.model('Test');
+        const testData = await Test.findOne({ name: 'connection-test' });
+        res.json({ 
+            message: 'MongoDB connection successful',
+            data: testData
+        });
+    } catch (error) {
+        res.status(500).json({ 
+            error: 'Database test failed',
+            details: error.message
+        });
+    }
+});
 
 // Serve static files from the React app
 app.use(express.static(path.join(__dirname, '../build')));
@@ -42,14 +91,6 @@ app.post('/api/convert', async (req, res) => {
         res.status(500).json({ error: 'Error converting CSV to JSON' });
     }
 });
-
-// Test route
-app.get('/api/test', (req, res) => {
-    res.json({ message: 'API is working!' });
-});
-
-// Skip MongoDB connection for now
-console.log('Skipping MongoDB connection for initial setup');
 
 // Handle React routing, return all requests to React app
 app.get('*', (req, res) => {
