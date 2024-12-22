@@ -8,31 +8,41 @@ const path = require('path');
 const app = express();
 const port = process.env.PORT || 5001;
 
-// MongoDB Connection with retry logic
+// MongoDB Connection with detailed logging
 const connectDB = async () => {
     try {
+        console.log('Starting MongoDB connection attempt...');
+        
         const options = {
             useNewUrlParser: true,
             useUnifiedTopology: true,
-            dbName: 'csvtojsonconverter' // Your database name
+            dbName: 'csvtojsonconverter',
+            serverSelectionTimeoutMS: 10000,
+            heartbeatFrequencyMS: 2000,
         };
 
         await mongoose.connect(process.env.MONGODB_URI, options);
-        console.log('MongoDB Connected Successfully!');
+        console.log('✅ MongoDB Connected Successfully to:', mongoose.connection.db.databaseName);
 
-        // Create a test collection
-        const testSchema = new mongoose.Schema({
-            name: String,
-            createdAt: { type: Date, default: Date.now }
+        // Create a test document to verify write access
+        const TestSchema = new mongoose.Schema({
+            test: String,
+            date: { type: Date, default: Date.now }
         });
         
-        const Test = mongoose.models.Test || mongoose.model('Test', testSchema);
-        await Test.create({ name: 'connection-test' });
-        console.log('Database write test successful!');
+        const Test = mongoose.models.Test || mongoose.model('Test', TestSchema);
+        await Test.create({ test: 'connection-test' });
+        console.log('✅ Test document created successfully');
 
     } catch (error) {
-        console.error('MongoDB connection error:', error);
-        console.log('Retrying connection in 5 seconds...');
+        console.error('❌ MongoDB connection error:', {
+            message: error.message,
+            code: error.code,
+            details: error
+        });
+        
+        // Retry connection
+        console.log('⏳ Retrying connection in 5 seconds...');
         setTimeout(connectDB, 5000);
     }
 };
@@ -40,67 +50,46 @@ const connectDB = async () => {
 // Connect to MongoDB
 connectDB();
 
-// CORS configuration
-const corsOptions = {
-    origin: process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-API-Key'],
-    credentials: true
-};
+// Monitor MongoDB connection
+mongoose.connection.on('connected', () => {
+    console.log('🟢 MongoDB connection established');
+});
 
-// Middleware
-app.use(cors(corsOptions));
-app.use(bodyParser.json());
+mongoose.connection.on('error', (err) => {
+    console.error('🔴 MongoDB connection error:', err);
+});
 
-// Test MongoDB connection route
+mongoose.connection.on('disconnected', () => {
+    console.log('🟡 MongoDB connection disconnected');
+});
+
+// Test route to verify database connection
 app.get('/api/db-test', async (req, res) => {
     try {
         const Test = mongoose.model('Test');
-        const testData = await Test.findOne({ name: 'connection-test' });
-        res.json({ 
-            message: 'MongoDB connection successful',
-            data: testData
+        const testDoc = await Test.findOne({ test: 'connection-test' });
+        
+        res.json({
+            status: 'success',
+            connection: {
+                isConnected: mongoose.connection.readyState === 1,
+                database: mongoose.connection.db.databaseName,
+                host: mongoose.connection.host
+            },
+            testDocument: testDoc
         });
     } catch (error) {
-        res.status(500).json({ 
-            error: 'Database test failed',
-            details: error.message
+        res.status(500).json({
+            status: 'error',
+            error: error.message,
+            connectionState: mongoose.connection.readyState
         });
     }
 });
 
-// Serve static files from the React app
-app.use(express.static(path.join(__dirname, '../build')));
-
-// CSV to JSON conversion endpoint
-app.post('/api/convert', async (req, res) => {
-    try {
-        const { csvData } = req.body;
-        if (!csvData) {
-            return res.status(400).json({ error: 'No CSV data provided' });
-        }
-        res.json({ 
-            message: 'CSV converted successfully',
-            data: { 
-                converted: true,
-                timestamp: new Date().toISOString()
-            }
-        });
-    } catch (error) {
-        console.error('Conversion error:', error);
-        res.status(500).json({ error: 'Error converting CSV to JSON' });
-    }
-});
-
-// Handle React routing, return all requests to React app
-app.get('*', (req, res) => {
-    const indexPath = path.join(__dirname, '../build/index.html');
-    if (require('fs').existsSync(indexPath)) {
-        res.sendFile(indexPath);
-    } else {
-        res.json({ message: 'Server is running, but React build is not found' });
-    }
-});
+// Middleware
+app.use(cors());
+app.use(bodyParser.json());
 
 // Start server
 app.listen(port, () => {
